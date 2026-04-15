@@ -1,0 +1,20 @@
+{{- include "fist.validateNamespace" . }}
+{{- if .Values.auth.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fist.auth.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    apiVersion: fist.sealyun.com/v1alpha1
+    kind: AuthorizationWebhookConfig
+{{- if .Values.authz.users }}
+    users:
+{{ toYaml .Values.authz.users | indent 6 }}
+{{- else }}
+    users: []
+{{- end }}
+{{- end }}

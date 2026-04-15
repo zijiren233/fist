@@ -1,0 +1,108 @@
+{{- include "fist.validateNamespace" . }}
+{{- if .Values.auth.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fist.auth.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+spec:
+  replicas: {{ .Values.auth.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fist
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: auth
+  template:
+    metadata:
+      labels:
+        {{- include "fist.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: auth
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fist
+          image: {{ include "fist.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./fist", "auth"]
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: fist
+              mountPath: /etc/fist
+            - name: fist-authz
+              mountPath: /etc/fist/authz
+              readOnly: true
+          resources:
+            {{- toYaml .Values.auth.resources | nindent 12 }}
+      volumes:
+        - name: fist
+          secret:
+            secretName: {{ include "fist.auth.tlsSecretName" . }}
+            items:
+              - key: cert.pem
+                path: cert.pem
+              - key: key.pem
+                path: key.pem
+        - name: fist-authz
+          configMap:
+            name: {{ include "fist.auth.configMapName" . }}
+            optional: true
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fist.auth.serviceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+spec:
+  type: {{ .Values.auth.service.type }}
+  selector:
+    app.kubernetes.io/name: fist
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: auth
+  ports:
+    - name: https
+      port: {{ .Values.auth.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      {{- if eq .Values.auth.service.type "NodePort" }}
+      nodePort: {{ .Values.auth.service.httpsNodePort }}
+      {{- end }}
+    - name: http
+      port: {{ .Values.auth.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      {{- if eq .Values.auth.service.type "NodePort" }}
+      nodePort: {{ .Values.auth.service.httpNodePort }}
+      {{- end }}
+{{- end }}

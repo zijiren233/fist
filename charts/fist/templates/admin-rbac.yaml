@@ -1,0 +1,29 @@
+{{- include "fist.validateNamespace" . }}
+{{- if or .Values.terminal.enabled .Values.rbacApp.enabled }}
+{{- if .Values.adminServiceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "fist.adminServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+---
+{{- end }}
+{{- if .Values.adminServiceAccount.clusterRoleBinding.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.adminServiceAccount.clusterRoleBinding.name }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fist.adminServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

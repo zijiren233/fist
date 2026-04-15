@@ -1,0 +1,90 @@
+{{- include "fist.validateNamespace" . }}
+{{- if .Values.terminal.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fist.terminal.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: terminal
+spec:
+  replicas: {{ .Values.terminal.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fist
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: terminal
+  template:
+    metadata:
+      labels:
+        {{- include "fist.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: terminal
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "fist.adminServiceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fist-terminal
+          image: {{ include "fist.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./fist", "terminal"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: MY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MY_SA_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+          resources:
+            {{- toYaml .Values.terminal.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fist.terminal.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: terminal
+spec:
+  type: {{ .Values.terminal.service.type }}
+  selector:
+    app.kubernetes.io/name: fist
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: terminal
+  ports:
+    - name: http
+      port: {{ .Values.terminal.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if eq .Values.terminal.service.type "NodePort" }}
+      nodePort: {{ .Values.terminal.service.nodePort }}
+      {{- end }}
+{{- end }}

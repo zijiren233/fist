@@ -1,0 +1,99 @@
+{{- include "fist.validateNamespace" . }}
+{{- if .Values.rbacApp.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "fist.rbacApp.adminSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  username: {{ .Values.rbacApp.adminSecret.username | quote }}
+  password: {{ .Values.rbacApp.adminSecret.password | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fist.rbacApp.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+spec:
+  replicas: {{ .Values.rbacApp.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fist
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: rbac
+  template:
+    metadata:
+      labels:
+        {{- include "fist.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rbac
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "fist.adminServiceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fist-rbac
+          image: {{ include "fist.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - ./fist
+            - rbac
+            - --ldap-enable={{ .Values.rbacApp.ldap.enabled }}
+            - --ldap-host={{ .Values.rbacApp.ldap.host }}
+            - --ldap-bind-dn={{ .Values.rbacApp.ldap.bindDN }}
+            - --ldap-bind-password={{ .Values.rbacApp.ldap.bindPassword }}
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            {{- toYaml .Values.rbacApp.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fist.rbacApp.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fist.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+spec:
+  type: {{ .Values.rbacApp.service.type }}
+  selector:
+    app.kubernetes.io/name: fist
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: rbac
+  ports:
+    - name: http
+      port: {{ .Values.rbacApp.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if eq .Values.rbacApp.service.type "NodePort" }}
+      nodePort: {{ .Values.rbacApp.service.nodePort }}
+      {{- end }}
+{{- end }}

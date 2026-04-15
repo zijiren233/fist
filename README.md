@@ -26,6 +26,10 @@ sh init.sh
 sh install.sh
 ```
 
+Detailed build and Kubernetes deployment guide:
+
+[BUILD_AND_DEPLOY_K8S.md](./BUILD_AND_DEPLOY_K8S.md)
+
 # Uninstall
 ```
 kubectl delete ns sealyun

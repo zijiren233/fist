@@ -1,0 +1,31 @@
+fist chart installed.
+
+Auth service:
+  https://fist.sealyun.svc.cluster.local:8443
+  http://fist.sealyun.svc.cluster.local:8080
+
+Blocked usernames from authz ConfigMap:
+{{- range .Values.authz.users }}
+{{- if .usernames }}
+  - {{ join ", " .usernames }}
+{{- else if .username }}
+  - {{ .username }}
+{{- end }}
+{{- end }}
+
+The chart deploys the in-cluster components only.
+To fully enable OIDC + authorization webhook, kube-apiserver must still be configured manually with:
+
+  --authorization-mode=Node,Webhook,RBAC
+  --authorization-webhook-config-file=/etc/kubernetes/pki/fist/authz-webhook.kubeconfig
+  --oidc-issuer-url=https://fist.sealyun.svc.cluster.local:8443
+  --oidc-client-id=sealyun-fist
+  --oidc-ca-file=/etc/kubernetes/pki/fist/ca.pem
+  --oidc-username-claim=name
+  --oidc-groups-claim=groups
+  --oidc-username-prefix=-
+  --oidc-groups-prefix=-
+
+Extract the CA certificate for kube-apiserver with:
+
+  kubectl get secret {{ include "fist.auth.tlsSecretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.ca\.pem}' | base64 -d

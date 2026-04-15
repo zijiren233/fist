@@ -1,0 +1,73 @@
+image:
+  repository: zijiren/fist
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+adminServiceAccount:
+  create: true
+  name: admin
+  clusterRoleBinding:
+    create: true
+    name: admin
+
+auth:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: NodePort
+    httpsPort: 8443
+    httpPort: 8080
+    httpsNodePort: 32201
+    httpNodePort: 32202
+  tlsSecret:
+    create: true
+    name: fist
+  resources: {}
+
+authz:
+  configMapName: fist-authz-webhook
+  users:
+    - usernames:
+        - kubernetes-admin
+        - pentest-admin
+      protectedResources:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: ["*"]
+          scope: All
+      whitelist: []
+
+terminal:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 32203
+  resources: {}
+
+rbacApp:
+  enabled: false
+  replicaCount: 1
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 32204
+  adminSecret:
+    name: fist-admin
+    username: admin
+    password: 1f2d1e2e67df
+  ldap:
+    enabled: true
+    host: ldap-service
+    bindDN: cn=admin,dc=sealyun,dc=com
+    bindPassword: admin
+  resources: {}
