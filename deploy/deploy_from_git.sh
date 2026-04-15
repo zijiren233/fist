@@ -7,10 +7,10 @@ WORKDIR="${WORKDIR:-/tmp/fist-deploy}"
 BRANCH="${BRANCH:-}"
 IMAGE="${IMAGE:-zijiren/fist:latest}"
 NAMESPACE="${NAMESPACE:-sealyun}"
-DEPLOY_TERMINAL="${DEPLOY_TERMINAL:-true}"
-DEPLOY_RBAC_APP="${DEPLOY_RBAC_APP:-false}"
-AUTH_SERVICE_NAME="${AUTH_SERVICE_NAME:-fist}"
 AUTH_CONFIGMAP_NAME="${AUTH_CONFIGMAP_NAME:-fist-authz-webhook}"
+AUTH_DEPLOYMENT_NAME="${AUTH_DEPLOYMENT_NAME:-fist}"
+AUTH_SERVICE_NAME="${AUTH_SERVICE_NAME:-fist}"
+AUTH_HTTPS_NODEPORT="${AUTH_HTTPS_NODEPORT:-32201}"
 BLOCKED_USERNAMES="${BLOCKED_USERNAMES:-kubernetes-admin,pentest-admin}"
 
 need_cmd() {
@@ -60,34 +60,30 @@ prepare_workspace() {
   fi
 }
 
-patch_manifests() {
+patch_auth_manifest() {
   local repo_dir="${WORKDIR}/repo"
   local auth_yaml="${repo_dir}/auth/deploy/auth.yaml"
-  local terminal_yaml="${repo_dir}/terminal/deploy/deploy.yaml"
-  local rbac_yaml="${repo_dir}/rbac/deploy/deploy.yaml"
-  local deploy_rbac_yaml="${repo_dir}/deploy/rbac.yaml"
 
-  log "patching manifests to use image ${IMAGE}"
-  sed -i.bak "s|image: .*|image: ${IMAGE}|g" "${auth_yaml}" "${terminal_yaml}" "${rbac_yaml}"
+  log "patching auth manifest to use image ${IMAGE}"
+  sed -i.bak "s|image: .*|image: ${IMAGE}|g" "${auth_yaml}"
+  sed -i.bak "s|namespace: sealyun|namespace: ${NAMESPACE}|g" "${auth_yaml}"
+  sed -i.bak "s|name: fist-authz-webhook|name: ${AUTH_CONFIGMAP_NAME}|g" "${auth_yaml}"
+  sed -i.bak "s|name: fist$|name: ${AUTH_SERVICE_NAME}|g" "${auth_yaml}"
+  sed -i.bak "s|name: fist$|name: ${AUTH_DEPLOYMENT_NAME}|g" "${auth_yaml}"
+  sed -i.bak "s|nodePort: 32201|nodePort: ${AUTH_HTTPS_NODEPORT}|g" "${auth_yaml}"
 
-  log "patching deprecated apiVersions for newer Kubernetes releases"
-  sed -i.bak 's|rbac.authorization.k8s.io/v1beta1|rbac.authorization.k8s.io/v1|g' "${deploy_rbac_yaml}"
-
-  python3 - "${auth_yaml}" "${terminal_yaml}" "${rbac_yaml}" <<'PY'
+  python3 - "${auth_yaml}" <<'PY'
 import sys
-for path in sys.argv[1:]:
-    out = []
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
-            stripped = line.lstrip()
-            if stripped.startswith('clusterIP:'):
-                continue
-            out.append(line)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(out)
+path = sys.argv[1]
+out = []
+with open(path, 'r', encoding='utf-8') as f:
+    for line in f:
+        if line.lstrip().startswith("clusterIP:"):
+            continue
+        out.append(line)
+with open(path, 'w', encoding='utf-8') as f:
+    f.writelines(out)
 PY
-
-  sed -i.bak "s/namespace: sealyun/namespace: ${NAMESPACE}/g" "${auth_yaml}" "${terminal_yaml}" "${rbac_yaml}" "${deploy_rbac_yaml}"
 }
 
 write_block_config() {
@@ -117,22 +113,75 @@ data:
 EOF
 }
 
-generate_certs_and_secret() {
-  local repo_dir="${WORKDIR}/repo"
-  pushd "${repo_dir}/auth/deploy" >/dev/null
-  rm -f ssl/*
-  sh gencert.sh
-  kubectl -n "${NAMESPACE}" delete secret fist --ignore-not-found
-  kubectl create secret generic fist \
-    --from-file=ssl/cert.pem \
-    --from-file=ssl/key.pem \
-    -n "${NAMESPACE}"
-  popd >/dev/null
+get_apiserver_advertise_address() {
+  python3 - <<'PY'
+from pathlib import Path
+manifest = Path("/etc/kubernetes/manifests/kube-apiserver.yaml").read_text().splitlines()
+for line in manifest:
+    stripped = line.strip()
+    if stripped.startswith("- --advertise-address="):
+        print(stripped.split("=", 1)[1])
+        raise SystemExit(0)
+raise SystemExit("failed to find --advertise-address in kube-apiserver manifest")
+PY
 }
 
-configure_apiserver() {
+generate_certs_and_secret() {
+  local advertise_address="$1"
+  local ssl_dir="${WORKDIR}/repo/auth/deploy/ssl"
+  mkdir -p "${ssl_dir}"
+
+  cat > "${ssl_dir}/req.cnf" <<EOF
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ${AUTH_SERVICE_NAME}.${NAMESPACE}.svc.cluster.local
+DNS.2 = ${AUTH_SERVICE_NAME}.${NAMESPACE}.cluster.local
+IP.1 = 127.0.0.1
+IP.2 = ${advertise_address}
+EOF
+
+  openssl genrsa -out "${ssl_dir}/ca-key.pem" 2048 >/dev/null 2>&1
+  openssl req -x509 -new -nodes -key "${ssl_dir}/ca-key.pem" -days 36500 -out "${ssl_dir}/ca.pem" -subj "/CN=fist-ca" >/dev/null 2>&1
+  openssl genrsa -out "${ssl_dir}/key.pem" 2048 >/dev/null 2>&1
+  openssl req -new -key "${ssl_dir}/key.pem" -out "${ssl_dir}/csr.pem" -subj "/CN=${AUTH_SERVICE_NAME}" -config "${ssl_dir}/req.cnf" >/dev/null 2>&1
+  openssl x509 -req \
+    -in "${ssl_dir}/csr.pem" \
+    -CA "${ssl_dir}/ca.pem" \
+    -CAkey "${ssl_dir}/ca-key.pem" \
+    -CAcreateserial \
+    -out "${ssl_dir}/cert.pem" \
+    -days 36500 \
+    -extensions v3_req \
+    -extfile "${ssl_dir}/req.cnf" >/dev/null 2>&1
+
+  kubectl -n "${NAMESPACE}" delete secret fist --ignore-not-found >/dev/null 2>&1 || true
+  kubectl create secret generic fist \
+    --from-file="${ssl_dir}/cert.pem" \
+    --from-file="${ssl_dir}/key.pem" \
+    -n "${NAMESPACE}"
+}
+
+deploy_auth() {
+  local repo_dir="${WORKDIR}/repo"
+  kubectl get ns "${NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${NAMESPACE}"
+  kubectl apply -f "${repo_dir}/auth/deploy/authz-configmap.yaml"
+  kubectl apply -f "${repo_dir}/auth/deploy/auth.yaml"
+  kubectl rollout status "deployment/${AUTH_DEPLOYMENT_NAME}" -n "${NAMESPACE}" --timeout=180s
+}
+
+write_webhook_kubeconfig() {
+  local advertise_address="$1"
   local kube_dir="/etc/kubernetes/pki/fist"
-  local manifest="/etc/kubernetes/manifests/kube-apiserver.yaml"
   mkdir -p "${kube_dir}"
   cp -f "${WORKDIR}/repo/auth/deploy/ssl/ca.pem" "${kube_dir}/ca.pem"
 
@@ -142,7 +191,7 @@ kind: Config
 clusters:
 - cluster:
     certificate-authority: ${kube_dir}/ca.pem
-    server: https://${AUTH_SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:8443
+    server: https://${advertise_address}:${AUTH_HTTPS_NODEPORT}
   name: fist-authz-webhook
 contexts:
 - context:
@@ -154,27 +203,35 @@ users:
 - name: fist-authz-webhook
   user: {}
 EOF
+}
 
-  python3 - "${manifest}" <<EOF
+patch_apiserver_manifest() {
+  local manifest="/etc/kubernetes/manifests/kube-apiserver.yaml"
+  cp -f "${manifest}" "${manifest}.bak.$(date +%Y%m%d%H%M%S)"
+
+  python3 - "${manifest}" <<'PY'
 import sys
-path = sys.argv[1]
-required = [
-    "    - --authorization-mode=Node,Webhook,RBAC\n",
-    "    - --authorization-webhook-config-file=/etc/kubernetes/pki/fist/authz-webhook.kubeconfig\n",
-    "    - --oidc-issuer-url=https://${AUTH_SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:8443\n",
-    "    - --oidc-client-id=sealyun-fist\n",
-    "    - --oidc-ca-file=/etc/kubernetes/pki/fist/ca.pem\n",
-    "    - --oidc-username-claim=name\n",
-    "    - --oidc-groups-claim=groups\n",
-    "    - --oidc-username-prefix=-\n",
-    "    - --oidc-groups-prefix=-\n",
-]
+from pathlib import Path
 
-with open(path, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+
+remove_prefixes = (
+    "    - --authorization-mode=",
+    "    - --authorization-webhook-config-file=",
+    "    - --oidc-issuer-url=",
+    "    - --oidc-client-id=",
+    "    - --oidc-ca-file=",
+    "    - --oidc-username-claim=",
+    "    - --oidc-groups-claim=",
+    "    - --oidc-username-prefix=",
+    "    - --oidc-groups-prefix=",
+)
+
+filtered = [line for line in lines if not line.startswith(remove_prefixes)]
 
 insert_idx = None
-for idx, line in enumerate(lines):
+for idx, line in enumerate(filtered):
     if line.strip() == "- kube-apiserver":
         insert_idx = idx + 1
         break
@@ -182,27 +239,31 @@ for idx, line in enumerate(lines):
 if insert_idx is None:
     raise SystemExit("failed to locate kube-apiserver command block in manifest")
 
-existing = set(lines)
-to_insert = [line for line in required if line not in existing]
-if to_insert:
-    lines[insert_idx:insert_idx] = to_insert
-    with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-EOF
+required = [
+    "    - --authorization-mode=Node,Webhook,RBAC\n",
+    "    - --authorization-webhook-config-file=/etc/kubernetes/pki/fist/authz-webhook.kubeconfig\n",
+]
+
+filtered[insert_idx:insert_idx] = required
+path.write_text("".join(filtered))
+PY
 }
 
-deploy_resources() {
-  local repo_dir="${WORKDIR}/repo"
-  kubectl apply -f "${repo_dir}/auth/deploy/authz-configmap.yaml"
-  kubectl apply -f "${repo_dir}/auth/deploy/auth.yaml"
+wait_for_apiserver() {
+  local attempts=90
+  local i
 
-  if [[ "${DEPLOY_TERMINAL}" == "true" ]]; then
-    kubectl apply -f "${repo_dir}/terminal/deploy/deploy.yaml"
-  fi
+  log "waiting for kube-apiserver to become ready again"
+  for ((i=1; i<=attempts; i++)); do
+    if kubectl --request-timeout=5s get --raw=/readyz >/dev/null 2>&1; then
+      log "kube-apiserver is ready"
+      return 0
+    fi
+    sleep 2
+  done
 
-  if [[ "${DEPLOY_RBAC_APP}" == "true" ]]; then
-    kubectl apply -f "${repo_dir}/rbac/deploy/deploy.yaml"
-  fi
+  echo "kube-apiserver did not become ready in time" >&2
+  return 1
 }
 
 print_summary() {
@@ -215,35 +276,22 @@ workspace: ${WORKDIR}/repo
 namespace: ${NAMESPACE}
 image: ${IMAGE}
 blocked usernames: ${BLOCKED_USERNAMES}
-auth service dns: https://${AUTH_SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:8443
+webhook kubeconfig: /etc/kubernetes/pki/fist/authz-webhook.kubeconfig
 
 notes:
-- this policy blocks resource requests for the configured usernames by matching wildcard apiGroups/resources/verbs.
+- only auth was deployed.
+- no oidc flags were added to kube-apiserver.
+- kube-apiserver authorization mode is now Node,Webhook,RBAC.
+- this only blocks resource requests for ${BLOCKED_USERNAMES}.
 - non-resource requests are not blocked by the current webhook implementation.
-- kube-apiserver static pod manifest was updated in /etc/kubernetes/manifests/kube-apiserver.yaml.
-- webhook kubeconfig was written to /etc/kubernetes/pki/fist/authz-webhook.kubeconfig.
 EOF
 }
 
-create_namespace_and_rbac() {
-  local repo_dir="${WORKDIR}/repo"
-  kubectl get ns "${NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${NAMESPACE}"
-  kubectl apply -f "${repo_dir}/deploy/rbac.yaml"
-}
-
 main() {
+  local advertise_address
+
   if [[ -z "${REPO_URL}" ]]; then
     echo "usage: $0 <git-repo-url>" >&2
-    exit 1
-  fi
-
-  if [[ "${NAMESPACE}" != "sealyun" ]]; then
-    echo "NAMESPACE=${NAMESPACE} is not supported by this script because auth/deploy/gencert.sh hardcodes the certificate SAN to fist.sealyun.svc.cluster.local" >&2
-    exit 1
-  fi
-
-  if [[ "${AUTH_SERVICE_NAME}" != "fist" ]]; then
-    echo "AUTH_SERVICE_NAME=${AUTH_SERVICE_NAME} is not supported by this script because auth/deploy/gencert.sh hardcodes the certificate SAN to fist.sealyun.svc.cluster.local" >&2
     exit 1
   fi
 
@@ -253,21 +301,16 @@ main() {
   need_cmd openssl
   need_cmd python3
 
+  advertise_address="$(get_apiserver_advertise_address)"
+
   prepare_workspace
-  patch_manifests
+  patch_auth_manifest
   write_block_config
-  create_namespace_and_rbac
-  generate_certs_and_secret
-  deploy_resources
-  configure_apiserver
-
-  log "re-applying auth deployment after secret/config preparation"
-  kubectl rollout restart deployment/fist -n "${NAMESPACE}"
-  kubectl rollout status deployment/fist -n "${NAMESPACE}" --timeout=180s
-
-  if [[ "${DEPLOY_TERMINAL}" == "true" ]]; then
-    kubectl rollout status deployment/fist-terminal -n "${NAMESPACE}" --timeout=180s
-  fi
+  generate_certs_and_secret "${advertise_address}"
+  deploy_auth
+  write_webhook_kubeconfig "${advertise_address}"
+  patch_apiserver_manifest
+  wait_for_apiserver
 
   print_summary
 }
