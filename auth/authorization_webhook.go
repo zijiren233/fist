@@ -161,7 +161,7 @@ func mergeUserPolicies(cfg *AuthorizationWebhookConfig, username string) *Author
 
 	merged := &AuthorizationUserPolicy{Username: username}
 	for _, user := range cfg.Users {
-		if user.Username != username {
+		if !policyMatchesUsername(user, username) {
 			continue
 		}
 		merged.ProtectedResources = append(merged.ProtectedResources, user.ProtectedResources...)
@@ -172,6 +172,16 @@ func mergeUserPolicies(cfg *AuthorizationWebhookConfig, username string) *Author
 		return nil
 	}
 	return merged
+}
+
+func policyMatchesUsername(policy AuthorizationUserPolicy, username string) bool {
+	if username == "" {
+		return false
+	}
+	if len(policy.Usernames) != 0 {
+		return containsExact(policy.Usernames, username)
+	}
+	return policy.Username == username
 }
 
 func normalizedResourceAttributes(attr *authorizationv1.ResourceAttributes) *authorizationv1.ResourceAttributes {

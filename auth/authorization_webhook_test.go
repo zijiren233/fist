@@ -11,7 +11,7 @@ func TestEvaluateAuthorizationReview(t *testing.T) {
 	cfg := &AuthorizationWebhookConfig{
 		Users: []AuthorizationUserPolicy{
 			{
-				Username: "alice",
+				Usernames: []string{"alice", "bob"},
 				ProtectedResources: []AuthorizationResourceRule{
 					{
 						APIGroups:  []string{""},
@@ -57,7 +57,7 @@ func TestEvaluateAuthorizationReview(t *testing.T) {
 		{
 			name: "user not configured returns no opinion",
 			review: authorizationReview{
-				User: "bob",
+				User: "charlie",
 				ResourceAttributes: &authorizationv1.ResourceAttributes{
 					Verb:      "get",
 					Group:     "",
@@ -71,6 +71,20 @@ func TestEvaluateAuthorizationReview(t *testing.T) {
 			name: "protected namespaced resource allowed by whitelist",
 			review: authorizationReview{
 				User: "alice",
+				ResourceAttributes: &authorizationv1.ResourceAttributes{
+					Verb:      "get",
+					Group:     "",
+					Resource:  "secrets",
+					Namespace: "dev",
+				},
+			},
+			allowed:   true,
+			reasonHas: "whitelist",
+		},
+		{
+			name: "second configured username in same policy is also allowed by whitelist",
+			review: authorizationReview{
+				User: "bob",
 				ResourceAttributes: &authorizationv1.ResourceAttributes{
 					Verb:      "get",
 					Group:     "",
@@ -152,6 +166,86 @@ func TestEvaluateAuthorizationReview(t *testing.T) {
 	}
 }
 
+func TestEvaluateAuthorizationReviewLegacyUsernameStillWorks(t *testing.T) {
+	cfg := &AuthorizationWebhookConfig{
+		Users: []AuthorizationUserPolicy{
+			{
+				Username: "legacy-user",
+				ProtectedResources: []AuthorizationResourceRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"secrets"},
+						Verbs:     []string{"get"},
+					},
+				},
+			},
+		},
+	}
+	normalizeAuthorizationConfig(cfg)
+
+	status := evaluateAuthorizationReview(cfg, authorizationReview{
+		User: "legacy-user",
+		ResourceAttributes: &authorizationv1.ResourceAttributes{
+			Verb:      "get",
+			Group:     "",
+			Resource:  "secrets",
+			Namespace: "default",
+		},
+	})
+
+	if !status.Denied {
+		t.Fatalf("denied = %v, want true", status.Denied)
+	}
+	if !contains(status.Reason, "blocked") {
+		t.Fatalf("reason = %q, want blocked", status.Reason)
+	}
+}
+
+func TestMergeUserPoliciesAcrossEntriesAndAliases(t *testing.T) {
+	cfg := &AuthorizationWebhookConfig{
+		Users: []AuthorizationUserPolicy{
+			{
+				Usernames: []string{"alice", "bob"},
+				ProtectedResources: []AuthorizationResourceRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"secrets"},
+						Verbs:     []string{"get"},
+					},
+				},
+			},
+			{
+				Username: "bob",
+				Whitelist: []AuthorizationResourceRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"secrets"},
+						Verbs:     []string{"get"},
+					},
+				},
+			},
+		},
+	}
+	normalizeAuthorizationConfig(cfg)
+
+	status := evaluateAuthorizationReview(cfg, authorizationReview{
+		User: "bob",
+		ResourceAttributes: &authorizationv1.ResourceAttributes{
+			Verb:      "get",
+			Group:     "",
+			Resource:  "secrets",
+			Namespace: "default",
+		},
+	})
+
+	if !status.Allowed {
+		t.Fatalf("allowed = %v, want true", status.Allowed)
+	}
+	if !contains(status.Reason, "whitelist") {
+		t.Fatalf("reason = %q, want whitelist", status.Reason)
+	}
+}
+
 func TestMatchesAuthorizationRuleSubresource(t *testing.T) {
 	rule := AuthorizationResourceRule{
 		APIGroups:    []string{""},
@@ -181,6 +275,47 @@ func TestMatchesAuthorizationRuleSubresource(t *testing.T) {
 		Namespace: "default",
 	}) {
 		t.Fatal("expected pods primary resource request not to match subresource rule")
+	}
+}
+
+func TestNormalizeAuthorizationConfigUsernames(t *testing.T) {
+	cfg := &AuthorizationWebhookConfig{
+		Users: []AuthorizationUserPolicy{
+			{
+				Username:  " alice ",
+				Usernames: []string{"bob", "alice", " bob ", ""},
+				ProtectedResources: []AuthorizationResourceRule{
+					{
+						Resources: []string{" secrets "},
+						Verbs:     []string{" GET "},
+					},
+				},
+			},
+			{
+				Usernames: []string{" ", ""},
+			},
+		},
+	}
+
+	normalizeAuthorizationConfig(cfg)
+
+	if len(cfg.Users) != 1 {
+		t.Fatalf("users len = %d, want 1", len(cfg.Users))
+	}
+	if len(cfg.Users[0].Usernames) != 2 {
+		t.Fatalf("usernames len = %d, want 2", len(cfg.Users[0].Usernames))
+	}
+	if cfg.Users[0].Usernames[0] != "alice" || cfg.Users[0].Usernames[1] != "bob" {
+		t.Fatalf("usernames = %#v, want [alice bob]", cfg.Users[0].Usernames)
+	}
+	if cfg.Users[0].Username != "" {
+		t.Fatalf("username = %q, want empty for multi-username policy", cfg.Users[0].Username)
+	}
+	if cfg.Users[0].ProtectedResources[0].Resources[0] != "secrets" {
+		t.Fatalf("resource = %q, want secrets", cfg.Users[0].ProtectedResources[0].Resources[0])
+	}
+	if cfg.Users[0].ProtectedResources[0].Verbs[0] != "get" {
+		t.Fatalf("verb = %q, want get", cfg.Users[0].ProtectedResources[0].Verbs[0])
 	}
 }
 

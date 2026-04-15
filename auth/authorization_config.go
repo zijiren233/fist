@@ -33,6 +33,7 @@ type AuthorizationWebhookConfig struct {
 
 type AuthorizationUserPolicy struct {
 	Username           string                      `json:"username,omitempty" yaml:"username,omitempty"`
+	Usernames          []string                    `json:"usernames,omitempty" yaml:"usernames,omitempty"`
 	ProtectedResources []AuthorizationResourceRule `json:"protectedResources,omitempty" yaml:"protectedResources,omitempty"`
 	Whitelist          []AuthorizationResourceRule `json:"whitelist,omitempty" yaml:"whitelist,omitempty"`
 }
@@ -129,15 +130,43 @@ func normalizeAuthorizationConfig(cfg *AuthorizationWebhookConfig) {
 
 	normalizedUsers := make([]AuthorizationUserPolicy, 0, len(cfg.Users))
 	for _, user := range cfg.Users {
-		user.Username = strings.TrimSpace(user.Username)
-		if user.Username == "" {
+		user.Usernames = normalizeUsernames(user.Username, user.Usernames)
+		if len(user.Usernames) == 0 {
 			continue
+		}
+		if len(user.Usernames) == 1 {
+			user.Username = user.Usernames[0]
+		} else {
+			user.Username = ""
 		}
 		user.ProtectedResources = normalizeAuthorizationRules(user.ProtectedResources)
 		user.Whitelist = normalizeAuthorizationRules(user.Whitelist)
 		normalizedUsers = append(normalizedUsers, user)
 	}
 	cfg.Users = normalizedUsers
+}
+
+func normalizeUsernames(username string, usernames []string) []string {
+	merged := make([]string, 0, len(usernames)+1)
+	if username != "" {
+		merged = append(merged, username)
+	}
+	merged = append(merged, usernames...)
+
+	normalized := make([]string, 0, len(merged))
+	seen := make(map[string]struct{}, len(merged))
+	for _, value := range merged {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
 }
 
 func normalizeAuthorizationRules(rules []AuthorizationResourceRule) []AuthorizationResourceRule {

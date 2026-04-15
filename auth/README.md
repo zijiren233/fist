@@ -12,6 +12,7 @@ Behavior:
 - requests outside the configured protected resource list return `NoOpinion`, then native RBAC continues to decide
 - requests that match protected resources are denied by default
 - only requests that also match the per-user `whitelist` are allowed
+- each policy can target one `username` or multiple `usernames`
 
 The webhook configuration is mounted from ConfigMap `fist-authz-webhook` in namespace `sealyun`.
 Example:
@@ -27,7 +28,9 @@ data:
     apiVersion: fist.sealyun.com/v1alpha1
     kind: AuthorizationWebhookConfig
     users:
-    - username: fanux
+    - usernames: ["fanux", "alice"]
+      # username: fanux
+      # `username` is kept for backward compatibility with single-user rules.
       protectedResources:
       - apiGroups: [""]
         resources: ["secrets"]
@@ -45,6 +48,9 @@ data:
         scope: Namespaced
         namespaces: ["default"]
 ```
+
+`username` and `usernames` can be mixed. The webhook normalizes them into one policy target list,
+so you can keep old manifests while gradually moving to multi-user rules.
 
 To enable the webhook in kube-apiserver, ensure:
 
