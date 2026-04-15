@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fist-authz-webhook
+  namespace: sealyun
+data:
+  config.yaml: |
+    apiVersion: fist.sealyun.com/v1alpha1
+    kind: AuthorizationWebhookConfig
+    users: []
+    # users:
+    # - username: fanux
+    #   protectedResources:
+    #   - apiGroups: [""]
+    #     resources: ["secrets"]
+    #     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    #     scope: Namespaced
+    #     namespaces: ["default", "prod"]
+    #   - apiGroups: ["rbac.authorization.k8s.io"]
+    #     resources: ["clusterroles", "clusterrolebindings"]
+    #     verbs: ["get", "list", "watch"]
+    #     scope: Cluster
+    #   whitelist:
+    #   - apiGroups: [""]
+    #     resources: ["secrets"]
+    #     verbs: ["get", "list"]
+    #     scope: Namespaced
+    #     namespaces: ["default"]

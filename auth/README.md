@@ -1,6 +1,61 @@
 # auth
 For create a kubernetes user jwt token
 
+## authorization webhook
+
+`fist auth` now also exposes a Kubernetes authorization webhook on `https://fist.sealyun.svc.cluster.local:8443/`.
+Use it when you need a second authorization layer for specific users after OIDC authentication.
+
+Behavior:
+
+- only configured users are managed by the webhook
+- requests outside the configured protected resource list return `NoOpinion`, then native RBAC continues to decide
+- requests that match protected resources are denied by default
+- only requests that also match the per-user `whitelist` are allowed
+
+The webhook configuration is mounted from ConfigMap `fist-authz-webhook` in namespace `sealyun`.
+Example:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fist-authz-webhook
+  namespace: sealyun
+data:
+  config.yaml: |
+    apiVersion: fist.sealyun.com/v1alpha1
+    kind: AuthorizationWebhookConfig
+    users:
+    - username: fanux
+      protectedResources:
+      - apiGroups: [""]
+        resources: ["secrets"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        scope: Namespaced
+        namespaces: ["default", "prod"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles", "clusterrolebindings"]
+        verbs: ["get", "list", "watch"]
+        scope: Cluster
+      whitelist:
+      - apiGroups: [""]
+        resources: ["secrets"]
+        verbs: ["get", "list"]
+        scope: Namespaced
+        namespaces: ["default"]
+```
+
+To enable the webhook in kube-apiserver, ensure:
+
+```yaml
+- --authorization-mode=Node,Webhook,RBAC
+- --authorization-webhook-config-file=/etc/kubernetes/pki/fist/authz-webhook.kubeconfig
+```
+
+`auth/deploy/install.sh` now writes `/etc/kubernetes/pki/fist/authz-webhook.kubeconfig` for you.
+The authorization webhook must be ordered before RBAC, otherwise an earlier RBAC allow would bypass this second check.
+
 ## using token
 
 > create jwt bare token

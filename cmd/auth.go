@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"time"
+
 	"github.com/fanux/fist/auth"
 	"github.com/spf13/cobra"
 )
@@ -38,4 +40,6 @@ func init() {
 	authCmd.Flags().StringVarP(&auth.AuthKey, "key", "K", "/etc/fist/key.pem", "the key.pem for fist")
 	authCmd.Flags().StringVarP(&auth.PrivateKey, "pri-pem", "", "/etc/fist/private.pem", "the private.pem for generate key pair")
 	authCmd.Flags().StringVarP(&auth.PublicKey, "pub-pem", "", "/etc/fist/public.pem", "the public.pem for generate key pair")
+	authCmd.Flags().StringVar(&auth.AuthorizationConfigPath, "authz-config", "/etc/fist/authz/config.yaml", "authorization webhook config file")
+	authCmd.Flags().DurationVar(&auth.AuthorizationCacheTTL, "authz-cache-ttl", 5*time.Second, "authorization webhook config cache ttl")
 }

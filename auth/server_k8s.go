@@ -6,17 +6,20 @@ import (
 	"gopkg.in/square/go-jose.v2"
 )
 
-//key paires
+// key paires
 var (
 	Pub  jose.JSONWebKey
 	Priv jose.JSONWebKey
 )
 
-//K8sRegister is k8s auth
+// K8sRegister is k8s auth
 func K8sRegister(auth *restful.WebService) {
 	auth.Path("/").
 		Consumes(restful.MIME_JSON).
 		Produces(restful.MIME_JSON) // you can specify this per route as well
+	//authorization webhook for kube-apiserver SubjectAccessReview
+	auth.Route(auth.POST("/").To(handleSubjectAccessReview))
+	auth.Route(auth.POST("/authorize").To(handleSubjectAccessReview))
 	//apiserver http
 	auth.Route(auth.GET("/.well-known/openid-configuration").To(discoveryHandler))
 	auth.Route(auth.GET("/keys").To(handlePublicKeys))
